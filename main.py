@@ -149,7 +149,6 @@ async def chat_endpoint(request: ChatRequest, api_key: bool = Depends(get_api_ke
         
         # Add assistant response to history
         session_manager.add_message(session_id, "assistant", answer)
-        stats_tracker.log_event("message_sent", session_id, {"role": "assistant"})
         
         return ChatResponse(
             session_id=session_id,
