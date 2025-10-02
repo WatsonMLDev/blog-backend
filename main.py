@@ -8,8 +8,10 @@ from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 from src.ingestion import GitRepositoryIngester
 from src.pipeline import PortfolioRagPipeline
+from src.session_manager import SessionManager
 from dataclasses import dataclass
 # Load environment variables from .env
 from dotenv import load_dotenv
@@ -29,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 rag_pipeline = PortfolioRagPipeline()
 ingester = GitRepositoryIngester()
+session_manager = SessionManager(session_ttl_minutes=60)  # 1 hour TTL
 
 
 API_KEY = os.environ.get("API_KEY")
@@ -56,6 +59,12 @@ async def get_api_key(api_key_header: str = Security(api_key_header)):
 # --- Data Models ---
 class ChatRequest(BaseModel):
     question: str
+    session_id: Optional[str] = None
+
+class ChatResponse(BaseModel):
+    session_id: str
+    answer: str
+    documents: list
 
 # --- Ingestion Logic ---
 def run_ingestion():
@@ -65,8 +74,20 @@ def run_ingestion():
     except Exception as e:
         logger.error(f"Ingestion failed: {e}")
 
-def schedule_ingestion():
+def cleanup_sessions():
+    """Clean up expired chat sessions."""
+    try:
+        count = session_manager.cleanup_expired_sessions()
+        if count > 0:
+            logger.info(f"Cleaned up {count} expired session(s)")
+    except Exception as e:
+        logger.error(f"Session cleanup failed: {e}")
+
+def schedule_tasks():
+    """Schedule background tasks."""
     schedule.every().day.at("03:00").do(run_ingestion)
+    schedule.every(15).minutes.do(cleanup_sessions)  # Clean up sessions every 15 minutes
+    
     while True:
         schedule.run_pending()
         time.sleep(60)
@@ -74,7 +95,7 @@ def schedule_ingestion():
 # --- Lifespan Event Handler ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    threading.Thread(target=schedule_ingestion, daemon=True).start()
+    threading.Thread(target=schedule_tasks, daemon=True).start()
     yield
     # Shutdown (if needed)
 
@@ -90,17 +111,57 @@ app.add_middleware(
 )
 
 # --- API Endpoints ---
-@app.post("/chat")
+@app.post("/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest, api_key: bool = Depends(get_api_key)):
     question = request.question.strip()
     if not question:
         return JSONResponse(status_code=400, content={"error": "Question is required."})
+    
+    # Get or create session
+    session_id = request.session_id
+    if session_id:
+        # Validate existing session
+        session = session_manager.get_session(session_id)
+        if not session:
+            # Session expired or invalid, create new one
+            session_id = session_manager.create_session()
+            logger.info(f"Session {request.session_id} not found, created new session: {session_id}")
+    else:
+        # Create new session
+        session_id = session_manager.create_session()
+    
+    # Add user question to history
+    session_manager.add_message(session_id, "user", question)
+    
     try:
         result = await rag_pipeline.run(question=question)
-        return {"answer": result.get("answer", ""), "documents": [doc.meta for doc in result.get("documents", [])]}
+        answer = result.get("answer", "")
+        documents = [doc.meta for doc in result.get("documents", [])]
+        
+        # Add assistant response to history
+        session_manager.add_message(session_id, "assistant", answer)
+        
+        return ChatResponse(
+            session_id=session_id,
+            answer=answer,
+            documents=documents
+        )
     except Exception as e:
         logger.error(f"Chat endpoint error: {e}")
         return JSONResponse(status_code=500, content={"error": "Failed to generate answer."})
+
+@app.get("/chat/history/{session_id}")
+async def get_chat_history(session_id: str, api_key: bool = Depends(get_api_key)):
+    """Retrieve chat history for a given session."""
+    history = session_manager.get_history(session_id)
+    
+    if history is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session not found or expired"
+        )
+    
+    return {"session_id": session_id, "history": history}
 
 @app.post("/run-ingestion")
 def run_ingestion_endpoint(api_key: bool = Depends(get_api_key)):
