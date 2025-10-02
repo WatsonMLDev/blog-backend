@@ -12,6 +12,7 @@ from typing import Optional
 from src.ingestion import GitRepositoryIngester
 from src.pipeline import PortfolioRagPipeline
 from src.session_manager import SessionManager
+from src.stats_tracker import StatsTracker
 from dataclasses import dataclass
 # Load environment variables from .env
 from dotenv import load_dotenv
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 rag_pipeline = PortfolioRagPipeline()
 ingester = GitRepositoryIngester()
 session_manager = SessionManager(session_ttl_minutes=60)  # 1 hour TTL
+stats_tracker = StatsTracker()  # Track chat statistics
 
 
 API_KEY = os.environ.get("API_KEY")
@@ -125,16 +127,19 @@ async def chat_endpoint(request: ChatRequest, api_key: bool = Depends(get_api_ke
         if not session:
             # Session expired or invalid, create new one
             session_id = session_manager.create_session()
+            stats_tracker.log_event("session_created", session_id)
             logger.info(f"Session {request.session_id} not found, created new session: {session_id}")
     else:
         # Create new session
         session_id = session_manager.create_session()
+        stats_tracker.log_event("session_created", session_id)
     
     # Get existing chat history (before adding current message)
     chat_history = session_manager.get_history(session_id) or []
     
     # Add user question to history
     session_manager.add_message(session_id, "user", question)
+    stats_tracker.log_event("message_sent", session_id, {"role": "user"})
     
     try:
         # Pass chat history to pipeline for context-aware query expansion
@@ -144,6 +149,7 @@ async def chat_endpoint(request: ChatRequest, api_key: bool = Depends(get_api_ke
         
         # Add assistant response to history
         session_manager.add_message(session_id, "assistant", answer)
+        stats_tracker.log_event("message_sent", session_id, {"role": "assistant"})
         
         return ChatResponse(
             session_id=session_id,
@@ -166,6 +172,29 @@ async def get_chat_history(session_id: str, api_key: bool = Depends(get_api_key)
         )
     
     return {"session_id": session_id, "history": history}
+
+@app.get("/stats")
+async def get_stats(days: int = None, api_key: bool = Depends(get_api_key)):
+    """
+    Get chat statistics.
+    
+    Args:
+        days: Optional - filter to only include events from the last N days
+    
+    Returns:
+        Aggregated statistics including:
+        - Total sessions and messages
+        - Unique session count
+        - Activity by day
+        - Recent activity (24h, 7d, 30d)
+    """
+    stats = stats_tracker.get_stats(days=days)
+    
+    # Also include current in-memory session info
+    current_sessions = session_manager.get_stats()
+    stats["current_active_sessions"] = current_sessions
+    
+    return stats
 
 @app.post("/run-ingestion")
 def run_ingestion_endpoint(api_key: bool = Depends(get_api_key)):
