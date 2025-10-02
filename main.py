@@ -130,11 +130,15 @@ async def chat_endpoint(request: ChatRequest, api_key: bool = Depends(get_api_ke
         # Create new session
         session_id = session_manager.create_session()
     
+    # Get existing chat history (before adding current message)
+    chat_history = session_manager.get_history(session_id) or []
+    
     # Add user question to history
     session_manager.add_message(session_id, "user", question)
     
     try:
-        result = await rag_pipeline.run(question=question)
+        # Pass chat history to pipeline for context-aware query expansion
+        result = await rag_pipeline.run(question=question, chat_history=chat_history)
         answer = result.get("answer", "")
         documents = [doc.meta for doc in result.get("documents", [])]
         

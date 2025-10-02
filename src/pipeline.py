@@ -32,6 +32,12 @@ class PortfolioRagPipeline:
         self.top_k = int(os.environ.get("RAG_TOP_K", "5"))
         self.gemini_key = Secret.from_env_var("GEMINI_API_KEY")
         self.doc_store_path = os.environ.get("DOCUMENT_STORE_PATH", "./data/chroma_db")
+        
+        # Model selection for different pipeline stages
+        self.intent_model = os.environ.get("INTENT_MODEL", "gemini-2.0-flash")
+        self.expander_model = os.environ.get("EXPANDER_MODEL", "gemini-2.0-flash")
+        self.chat_model = os.environ.get("CHAT_MODEL", "gemini-2.0-flash")
+        self.rag_model = os.environ.get("RAG_MODEL", "gemini-2.5-flash")  # Use experimental for final answers
 
     def _initialize_components(self):
         """Initializes core Haystack components."""
@@ -44,19 +50,29 @@ class PortfolioRagPipeline:
             document_store=self.document_store,
             top_k=self.top_k
         )
-        self.llm = GoogleGenAIChatGenerator(model="gemini-2.5-flash", api_key=self.gemini_key)
+        
+        # Separate LLM instances for different pipeline stages
+        self.intent_llm = GoogleGenAIChatGenerator(model=self.intent_model, api_key=self.gemini_key)
+        self.expander_llm = GoogleGenAIChatGenerator(model=self.expander_model, api_key=self.gemini_key)
+        self.chat_llm = GoogleGenAIChatGenerator(model=self.chat_model, api_key=self.gemini_key)
+        self.rag_llm = GoogleGenAIChatGenerator(model=self.rag_model, api_key=self.gemini_key)
 
     def _initialize_prompts(self):
         """Defines and builds all necessary prompt templates with detailed instructions."""
         # --- Intent Classification Prompt ---
         self.intent_prompt_builder = ChatPromptBuilder(template=[
             ChatMessage.from_user(
-                "You are an expert at classifying user intent. Based on the user's message, "
-                "is their intent to 'search' for portfolio information, or just to 'chat'?\n"
+                "You are an expert at classifying user intent. Based on the conversation history and the user's message, "
+                "is their intent to 'search' for portfolio information, or just to 'chat'?\n\n"
+                "IMPORTANT RULES:\n"
+                "1. If the user is responding to a question from the assistant (like 'yes', 'tell me more', 'please', 'elaborate'), classify as 'search'\n"
+                "2. If the user is asking about portfolio content, projects, or experience, classify as 'search'\n"
+                "3. Only classify as 'chat' if the user is making small talk unrelated to the portfolio (like 'how are you', 'what's the weather')\n\n"
                 "Answer only with the word 'search' or 'chat'.\n\n"
+                "Conversation History:\n{{chat_history}}\n\n"
                 "User message: {{question}}"
             )],
-            required_variables=["question"]
+            required_variables=["question", "chat_history"]
             )
         
         # --- Conversational Chat Prompt (Enhanced) ---
@@ -74,9 +90,16 @@ class PortfolioRagPipeline:
         self.expander_prompt_builder = ChatPromptBuilder(template=[
             ChatMessage.from_user(
                 "Given the conversation history and the user's latest question, rewrite the question "
-                "into a concise, self-contained search query optimized for embedding-based retrieval.\n"
-                "If the question is already clear, return it as is.\n\n"
-                "History: {{chat_history}}\nQuestion: {{question}}\n\nRewritten Search Query:"
+                "into a concise, self-contained search query optimized for embedding-based retrieval.\n\n"
+                "IMPORTANT: If the user's question is a follow-up (like 'yes', 'tell me more', 'can you elaborate'), "
+                "expand it based on the previous conversation to include what topic they want more information about.\n\n"
+                "For example:\n"
+                "- If assistant asked 'Would you like more details about project X?' and user said 'yes', "
+                "  expand to: 'Tell me more details about project X'\n"
+                "- If the question is already clear and specific, return it as is.\n\n"
+                "Conversation History:\n{{chat_history}}\n\n"
+                "User's Question: {{question}}\n\n"
+                "Expanded Search Query:"
             )],
             required_variables=["question", "chat_history"]
         )
@@ -113,10 +136,10 @@ class PortfolioRagPipeline:
             required_variables=["question", "expanded_query", "documents"]
         )
 
-    def _run_llm(self, prompt_builder: ChatPromptBuilder, data: Dict[str, Any]) -> str:
-        """Helper function to run a prompt through the LLM and get the text reply."""
+    def _run_llm(self, prompt_builder: ChatPromptBuilder, data: Dict[str, Any], llm: GoogleGenAIChatGenerator) -> str:
+        """Helper function to run a prompt through a specific LLM and get the text reply."""
         prompt = prompt_builder.run(**data).get("prompt", [])
-        response = self.llm.run(messages=prompt)
+        response = llm.run(messages=prompt)
         return response["replies"][0].text if response.get("replies") else ""
 
     async def run(self, question: str, chat_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
@@ -127,21 +150,21 @@ class PortfolioRagPipeline:
         chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in (chat_history or [])])
         logger.info(f"Running pipeline for question: {question}")
         
-        # 1. Classify Intent
-        intent = self._run_llm(self.intent_prompt_builder, {"question": question}).strip().lower()
+        # 1. Classify Intent (with chat history for context)
+        intent = self._run_llm(self.intent_prompt_builder, {"question": question, "chat_history": chat_history_str}, self.intent_llm).strip().lower()
         logger.info(f"Classified intent: '{intent}'")
         
         # 2a. Handle "chat" intent
         if "chat" in intent:
             logger.info("Handling as a conversational chat.")
-            final_response = self._run_llm(self.chat_prompt_builder, {"question": question})
+            final_response = self._run_llm(self.chat_prompt_builder, {"question": question}, self.chat_llm)
             return {"answer": final_response, "documents": []}
 
         # 2b. Handle "search" intent
         logger.info("Handling as a search query.")
         
         # 3. Expand Query
-        expanded_query = self._run_llm(self.expander_prompt_builder, {"question": question, "chat_history": chat_history_str})
+        expanded_query = self._run_llm(self.expander_prompt_builder, {"question": question, "chat_history": chat_history_str}, self.expander_llm)
         logger.info(f"Expanded query: '{expanded_query}'")
         
         # 4. Retrieve Documents
@@ -156,7 +179,8 @@ class PortfolioRagPipeline:
                 "question": question,
                 "expanded_query": expanded_query,
                 "documents": documents
-            }
+            },
+            self.rag_llm
         )
         logger.info("Generated final answer.")
         
