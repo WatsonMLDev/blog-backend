@@ -35,10 +35,10 @@ class PortfolioRagPipeline:
         self.doc_store_path = os.environ.get("DOCUMENT_STORE_PATH", "./data/chroma_db")
         
         # Model selection for different pipeline stages
-        self.intent_model = os.environ.get("INTENT_MODEL", "gemini-2.0-flash")
-        self.expander_model = os.environ.get("EXPANDER_MODEL", "gemini-2.0-flash")
-        self.chat_model = os.environ.get("CHAT_MODEL", "gemini-2.0-flash")
-        self.rag_model = os.environ.get("RAG_MODEL", "gemini-2.5-flash")  # Use experimental for final answers
+        self.intent_model = os.environ.get("INTENT_MODEL", "gemini-3-flash-preview")
+        self.expander_model = os.environ.get("EXPANDER_MODEL", "gemini-3-flash-preview")
+        self.chat_model = os.environ.get("CHAT_MODEL", "gemini-3-flash-preview")
+        self.rag_model = os.environ.get("RAG_MODEL", "gemini-3-flash-preview")  # Use experimental for final answers
 
     def _initialize_components(self):
         """Initializes core Haystack components."""
