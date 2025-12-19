@@ -28,19 +28,51 @@ class StatsTracker:
         logger.info(f"StatsTracker initialized with file: {stats_file}")
     
     def _ensure_file_exists(self):
-        """Create the stats file and directory if they don't exist."""
+        """Create the stats file and directory if they don't exist. handles migration from legacy JSON."""
         stats_path = Path(self.stats_file)
         stats_path.parent.mkdir(parents=True, exist_ok=True)
         
         if not stats_path.exists():
-            # Initialize with empty events list
-            with open(self.stats_file, 'w') as f:
-                json.dump({"events": []}, f)
+            # Create empty file
+            stats_path.touch()
             logger.info(f"Created new stats file: {self.stats_file}")
-    
+        else:
+            # Check for legacy format and migrate if needed
+            self._migrate_if_needed()
+
+    def _migrate_if_needed(self):
+        """Migrates legacy JSON format to JSONL if detected."""
+        try:
+            with open(self.stats_file, 'r') as f:
+                first_char = f.read(1)
+                if first_char != '{':
+                    return # Already JSONL or empty
+
+                # It's legacy JSON, read the rest
+                f.seek(0)
+                try:
+                    data = json.load(f)
+                    # Verify it's actually the legacy structure
+                    if not isinstance(data, dict) or "events" not in data:
+                        return # Not legacy format (might be single line JSONL)
+
+                    events = data.get("events", [])
+                except json.JSONDecodeError:
+                    return # Corrupted or empty
+
+            # Write back in JSONL format
+            logger.info(f"Migrating stats file {self.stats_file} to JSONL format...")
+            with open(self.stats_file, 'w') as f:
+                for event in events:
+                    f.write(json.dumps(event) + "\n")
+            logger.info("Migration complete.")
+
+        except Exception as e:
+            logger.error(f"Error checking/migrating stats file: {e}")
+
     def log_event(self, event_type: str, session_id: str, metadata: Dict[str, Any] = None):
         """
-        Log an event to the stats file.
+        Log an event to the stats file (append-only JSONL).
         
         Args:
             event_type: Type of event ('session_created', 'message_sent', etc.)
@@ -56,16 +88,9 @@ class StatsTracker:
         }
         
         try:
-            # Read existing data
-            with open(self.stats_file, 'r') as f:
-                data = json.load(f)
-            
-            # Append new event
-            data["events"].append(event)
-            
-            # Write back
-            with open(self.stats_file, 'w') as f:
-                json.dump(data, f, indent=2)
+            # Append new event as a single line
+            with open(self.stats_file, 'a') as f:
+                f.write(json.dumps(event) + "\n")
             
             logger.debug(f"Logged event: {event_type} for session {session_id}")
         except Exception as e:
@@ -82,10 +107,15 @@ class StatsTracker:
             Dictionary with various statistics
         """
         try:
+            events = []
             with open(self.stats_file, 'r') as f:
-                data = json.load(f)
-            
-            events = data.get("events", [])
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            events.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
             
             # Filter by date if specified
             if days is not None:
