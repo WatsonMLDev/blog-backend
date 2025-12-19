@@ -27,11 +27,17 @@ jobs:
 
     - name: Verify dependencies (requirements.txt vs requirements.in)
       run: |
-        # Check if requirements.txt is up to date with requirements.in
-        # We run pip-compile in dry-run mode and output to stdout, then diff with existing file
-        pip-compile requirements.in --output-file=- --quiet | diff - requirements.txt
-        if [ $? -ne 0 ]; then
-          echo "requirements.txt is not in sync with requirements.in. Please run 'pip-compile requirements.in'"
+        # Ensure that requirements.txt matches what pip-compile would generate.
+        # This prevents manual editing of requirements.txt or committing outdated dependencies.
+        # We use --output-file=requirements.txt so the header matches the committed file.
+        pip-compile requirements.in --output-file=requirements.txt --quiet
+
+        # Check if the file has changed using git diff
+        if ! git diff --exit-code requirements.txt; then
+          echo "Error: requirements.txt is not in sync with requirements.in."
+          echo "Please run 'pip-compile requirements.in' and commit the changes."
+          # Show the diff to help debug
+          git diff requirements.txt
           exit 1
         fi
 
