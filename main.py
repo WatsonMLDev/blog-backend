@@ -151,6 +151,14 @@ async def chat_endpoint(request: ChatRequest, api_key: bool = Depends(get_api_ke
         # Add assistant response to history
         session_manager.add_message(session_id, "assistant", answer)
         
+        # Log inference stats
+        stats_tracker.log_event("inference_completed", session_id, {
+            "latency": result.get("latency"),
+            "intent": result.get("intent"),
+            "model": result.get("model"),
+            "doc_count": len(documents)
+        })
+
         return ChatResponse(
             session_id=session_id,
             answer=answer,

@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from typing import List, Dict, Any, Optional
 
@@ -147,6 +148,7 @@ class PortfolioRagPipeline:
         Runs the multi-stage RAG pipeline.
         Returns a dictionary with the final response and retrieved documents.
         """
+        start_time = time.time()
         chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in (chat_history or [])])
         logger.info(f"Running pipeline for question: {question}")
         
@@ -158,7 +160,14 @@ class PortfolioRagPipeline:
         if "chat" in intent:
             logger.info("Handling as a conversational chat.")
             final_response = self._run_llm(self.chat_prompt_builder, {"question": question}, self.chat_llm)
-            return {"answer": final_response, "documents": []}
+            latency = time.time() - start_time
+            return {
+                "answer": final_response,
+                "documents": [],
+                "intent": "chat",
+                "latency": latency,
+                "model": self.chat_model
+            }
 
         # 2b. Handle "search" intent
         logger.info("Handling as a search query.")
@@ -184,4 +193,11 @@ class PortfolioRagPipeline:
         )
         logger.info("Generated final answer.")
         
-        return {"answer": final_response, "documents": documents}
+        latency = time.time() - start_time
+        return {
+            "answer": final_response,
+            "documents": documents,
+            "intent": "search",
+            "latency": latency,
+            "model": self.rag_model
+        }
