@@ -4,7 +4,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 # Haystack Core
-from haystack.dataclasses import ChatMessage, Document
+from haystack.dataclasses import ChatMessage
 from haystack.components.builders import ChatPromptBuilder
 from haystack.utils import Secret
 

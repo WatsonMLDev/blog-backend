@@ -12,7 +12,7 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List
 
 # Environment & Haystack
 from dotenv import load_dotenv

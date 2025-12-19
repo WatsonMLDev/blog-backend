@@ -37,7 +37,7 @@ class TestIngestionSecurity:
         # Simulate repo not existing -> Clone path
         ingester.repo_path.exists.return_value = False
 
-        with patch("subprocess.run") as mock_run:
+        with patch("subprocess.run"):
             try:
                 ingester.clone_or_pull_repo()
             except Exception:
@@ -58,7 +58,7 @@ class TestIngestionSecurity:
         ingester.repo_path.exists.return_value = True
         (ingester.repo_path / ".git").exists.return_value = True
 
-        with patch("subprocess.run") as mock_run:
+        with patch("subprocess.run"):
              try:
                 ingester.clone_or_pull_repo()
              except Exception:

@@ -3,7 +3,7 @@ import schedule
 import time
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Depends, HTTPException, Security, status
+from fastapi import FastAPI, Depends, HTTPException, Security, status
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +13,6 @@ from src.ingestion import GitRepositoryIngester
 from src.pipeline import PortfolioRagPipeline
 from src.session_manager import SessionManager
 from src.stats_tracker import StatsTracker
-from dataclasses import dataclass
 # Load environment variables from .env
 from dotenv import load_dotenv
 import os
