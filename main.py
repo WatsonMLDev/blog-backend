@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from dotenv import load_dotenv
 import os
 import secrets
+import google.genai.errors
 
 load_dotenv()
 
@@ -156,6 +157,28 @@ async def chat_endpoint(request: ChatRequest, api_key: bool = Depends(get_api_ke
             documents=documents
         )
     except Exception as e:
+        # Check if it's a wrapped Google GenAI error (usually wrapped in RuntimeError)
+        if isinstance(e, RuntimeError) and isinstance(e.__cause__, google.genai.errors.APIError):
+            genai_error = e.__cause__
+            status_code = genai_error.code
+
+            # Simplified error mapping
+            error_mapping = {
+                429: "Rate limit exceeded. Please try again later.",
+                400: "Bad request. Please check your input.",
+                403: "Permission denied.",
+                404: "Resource not found.",
+                500: "Internal server error from AI provider."
+            }
+
+            error_message = error_mapping.get(status_code, "An error occurred with the AI provider.")
+
+            # Concise logging for expected API errors (avoids dumping full JSON)
+            logger.error(f"Google GenAI API Error: Code={status_code}, Status={genai_error.status}, Message={error_message}, Endpoint=/chat")
+
+            return JSONResponse(status_code=status_code, content={"error": error_message})
+
+        # Standard logging for other unexpected errors
         logger.error(f"Chat endpoint error: {e}")
         return JSONResponse(status_code=500, content={"error": "Failed to generate answer."})
 
