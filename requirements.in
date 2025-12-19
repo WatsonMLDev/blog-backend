@@ -12,3 +12,4 @@ chromadb>=0.4.0
 google-genai-haystack>=0.1.0
 schedule
 chroma-haystack
+pytest
