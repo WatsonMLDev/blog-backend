@@ -69,6 +69,12 @@ class GitRepositoryIngester:
         pipeline.connect("embedder.documents", "writer.documents")
         return pipeline
 
+    def _mask_url(self, url: str) -> str:
+        """Masks sensitive information in the URL for logging."""
+        if self.github_token and f"oauth2:{self.github_token}@" in url:
+            return url.replace(f"oauth2:{self.github_token}@", "oauth2:***@")
+        return url
+
     def clone_or_pull_repo(self) -> None:
         """Clones the repository or pulls the latest changes."""
         try:
@@ -78,14 +84,14 @@ class GitRepositoryIngester:
                 auth_repo_url = self.repo_url.replace("https://", f"https://oauth2:{self.github_token}@")
 
             if self.repo_path.exists() and (self.repo_path / ".git").exists():
-                logger.info(f"Repo exists. Updating remote URL and pulling latest changes from {auth_repo_url}...")
+                logger.info(f"Repo exists. Updating remote URL and pulling latest changes from {self._mask_url(auth_repo_url)}...")
                 # Update remote URL to include token auth
                 subprocess.run(["git", "remote", "set-url", "origin", auth_repo_url], cwd=str(self.repo_path), check=True, text=True, capture_output=True)
                 subprocess.run(["git", "pull"], cwd=str(self.repo_path), check=True, text=True, capture_output=True)
             else:
                 if self.repo_path.exists():
                     shutil.rmtree(self.repo_path)
-                logger.info(f"Cloning repository {auth_repo_url} into {self.repo_path}...")
+                logger.info(f"Cloning repository {self._mask_url(auth_repo_url)} into {self.repo_path}...")
                 subprocess.run(["git", "clone", auth_repo_url, str(self.repo_path)], check=True, text=True, capture_output=True)
         except subprocess.CalledProcessError as e:
             logger.error(f"Git operation failed: {e.stderr}")
