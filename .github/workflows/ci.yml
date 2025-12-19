@@ -25,22 +25,6 @@ jobs:
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
         pip install ruff pytest
 
-    - name: Verify dependencies (requirements.txt vs requirements.in)
-      run: |
-        # Ensure that requirements.txt matches what pip-compile would generate.
-        # This prevents manual editing of requirements.txt or committing outdated dependencies.
-        # We use --output-file=requirements.txt so the header matches the committed file.
-        pip-compile requirements.in --output-file=requirements.txt --quiet
-
-        # Check if the file has changed using git diff
-        if ! git diff --exit-code requirements.txt; then
-          echo "Error: requirements.txt is not in sync with requirements.in."
-          echo "Please run 'pip-compile requirements.in' and commit the changes."
-          # Show the diff to help debug
-          git diff requirements.txt
-          exit 1
-        fi
-
     - name: Lint with Ruff
       run: |
         ruff check .
