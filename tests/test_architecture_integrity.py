@@ -1,6 +1,4 @@
 
-import os
-import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
 from main import app, ChatResponse
