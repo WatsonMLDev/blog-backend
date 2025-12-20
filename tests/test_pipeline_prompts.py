@@ -1,7 +1,6 @@
 import os
 import pytest
 from unittest.mock import MagicMock, patch
-from haystack.dataclasses import ChatMessage
 
 # Set dummy env vars before importing pipeline to avoid KeyErrors
 os.environ["GEMINI_API_KEY"] = "fake_key"
