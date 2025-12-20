@@ -1,8 +1,6 @@
 
 import os
-import shutil
 import pytest
-from pathlib import Path
 from unittest.mock import MagicMock
 from src.ingestion import GitRepositoryIngester
 
