@@ -100,16 +100,35 @@ class GitRepositoryIngester:
     def _gather_file_paths(self) -> List[Path]:
         """Gathers a unique set of file paths to be indexed."""
         paths = set()
+        repo_resolved = self.repo_path.resolve()
+
         for rel_file in filter(None, [f.strip() for f in self.files_to_index]):
             candidate = self.repo_path / rel_file
             if candidate.is_file():
-                paths.add(candidate)
+                # Security check: Ensure we don't traverse outside repo_path
+                try:
+                    resolved = candidate.resolve()
+                    if not resolved.is_relative_to(repo_resolved):
+                        logger.warning(f"Skipping file {candidate} as it resolves outside the repository: {resolved}")
+                        continue
+                    paths.add(candidate)
+                except Exception as e:
+                    logger.warning(f"Error checking file {candidate}: {e}")
+
         for rel_dir in filter(None, [d.strip() for d in self.directories_to_index]):
             base_dir = self.repo_path / rel_dir
             if base_dir.is_dir():
                 for path in base_dir.rglob("*"):
                     if path.is_file() and path.suffix.lower() in self.allowed_extensions:
-                        paths.add(path)
+                        # Security check: Ensure we don't traverse outside repo_path
+                        try:
+                            resolved = path.resolve()
+                            if not resolved.is_relative_to(repo_resolved):
+                                logger.warning(f"Skipping file {path} as it resolves outside the repository: {resolved}")
+                                continue
+                            paths.add(path)
+                        except Exception as e:
+                            logger.warning(f"Error processing path {path}: {e}")
         return list(paths)
 
     def extract_documents(self) -> List[Document]:
