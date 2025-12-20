@@ -56,3 +56,51 @@ def test_rag_prompt_structure(mock_pipeline):
     assert "<question>Q?</question>" in content
     assert "<context>" in content
     assert "Test Content" in content
+
+def test_unified_prompt_structure(mock_pipeline):
+    """Verify Unified Prompt (Fast Mode) structure."""
+    mock_docs = [MagicMock(content="Test Content", meta={'file_name': 'test.md'})]
+    res = mock_pipeline.unified_prompt_builder.run(question="Q?", documents=mock_docs)
+    messages = res['prompt']
+
+    assert len(messages) == 2
+    assert messages[0].role.value == "system"
+    assert "Unified Prompt" not in messages[0].text # Just checking content isn't leaked
+    assert "INSTRUCTIONS:" in messages[0].text
+
+    content = messages[1].text
+    assert "<question>Q?</question>" in content
+    assert "<context>" in content
+    assert "Test Content" in content
+
+def test_fast_mode_execution():
+    """Verify that setting RAG_PIPELINE_MODE='fast' skips intent/expansion."""
+    import asyncio
+
+    async def run_test():
+        with patch.dict(os.environ, {"RAG_PIPELINE_MODE": "fast", "GEMINI_API_KEY": "fake"}):
+            with patch('src.pipeline.ChromaDocumentStore'), \
+                 patch('src.pipeline.GoogleGenAITextEmbedder') as mock_embedder, \
+                 patch('src.pipeline.ChromaEmbeddingRetriever') as mock_retriever, \
+                 patch('src.pipeline.GoogleGenAIChatGenerator') as mock_llm:
+
+                # Setup mocks
+                mock_embedder.return_value.run.return_value = {"embedding": [0.1]}
+                mock_retriever.return_value.run.return_value = {"documents": []}
+                mock_llm.return_value.run.return_value = {"replies": [MagicMock(text="Fast Answer")]}
+
+                pipeline = PortfolioRagPipeline()
+                result = await pipeline.run("Test Question")
+
+                # Verify result
+                assert result["intent"] == "fast_rag"
+                assert result["answer"] == "Fast Answer"
+
+                # Verify calls
+                # 1. Embedder should be called with raw question (no expansion)
+                mock_embedder.return_value.run.assert_called_with(text="Test Question")
+
+                # 2. LLM should be called ONLY ONCE (for the final answer)
+                assert mock_llm.return_value.run.call_count == 1
+
+    asyncio.run(run_test())

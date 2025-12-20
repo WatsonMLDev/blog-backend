@@ -30,6 +30,7 @@ class PortfolioRagPipeline:
 
     def _load_config(self):
         """Loads configuration from environment variables."""
+        self.pipeline_mode = os.environ.get("RAG_PIPELINE_MODE", "standard")
         self.top_k = int(os.environ.get("RAG_TOP_K", "5"))
         self.gemini_key = Secret.from_env_var("GEMINI_API_KEY")
         self.doc_store_path = os.environ.get("DOCUMENT_STORE_PATH", "./data/chroma_db")
@@ -133,6 +134,36 @@ class PortfolioRagPipeline:
             required_variables=["question", "expanded_query", "documents"]
         )
 
+        # --- Unified Prompt (Fast Mode) ---
+        unified_system_msg = """
+        You are a friendly assistant for Charlie Watson's portfolio.
+
+        INSTRUCTIONS:
+        1. Search the <context> below for the answer to the user's question.
+        2. If the answer is found, summarize it concisely (3-4 sentences).
+        3. If the context is irrelevant but the user is greeting you (e.g. "Hi"), be polite and ask how you can help with the portfolio.
+        4. If the answer is not in context and it's a specific question, say "Sorry, I couldn't find that information in the portfolio."
+        """
+
+        unified_user_msg = """
+        <question>{{question}}</question>
+
+        <context>
+        {% for doc in documents %}
+        --- Document: {{ doc.meta.get('file_name', 'Unknown') }} ---
+        {{ doc.content }}
+        {% endfor %}
+        </context>
+        """
+
+        self.unified_prompt_builder = ChatPromptBuilder(
+            template=[
+                ChatMessage.from_system(unified_system_msg),
+                ChatMessage.from_user(unified_user_msg)
+            ],
+            required_variables=["question", "documents"]
+        )
+
     def _run_llm(self, prompt_builder: ChatPromptBuilder, data: Dict[str, Any], llm: GoogleGenAIChatGenerator) -> str:
         """Helper function to run a prompt through a specific LLM and get the text reply."""
         prompt = prompt_builder.run(**data).get("prompt", [])
@@ -145,9 +176,37 @@ class PortfolioRagPipeline:
         Returns a dictionary with the final response and retrieved documents.
         """
         start_time = time.time()
-        chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in (chat_history or [])])
         logger.info(f"Running pipeline for question: {question}")
         
+        # FAST MODE: Single-step retrieval and generation
+        if self.pipeline_mode == "fast":
+            logger.info("Running in FAST MODE (skipping intent classification and query expansion).")
+
+            # 1. Retrieve Documents (using raw question)
+            query_embedding = self.query_embedder.run(text=question).get("embedding", [])
+            documents = self.retriever.run(query_embedding=query_embedding).get("documents", [])
+            logger.info(f"Retrieved {len(documents)} documents.")
+
+            # 2. Generate Final Answer with Unified Prompt
+            final_response = self._run_llm(
+                self.unified_prompt_builder,
+                {"question": question, "documents": documents},
+                self.rag_llm
+            )
+            logger.info("Generated final answer (Fast Mode).")
+
+            latency = time.time() - start_time
+            return {
+                "answer": final_response,
+                "documents": documents,
+                "intent": "fast_rag",
+                "latency": latency,
+                "model": self.rag_model
+            }
+
+        # STANDARD MODE: Intent -> Expand -> Retrieve -> Generate
+        chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in (chat_history or [])])
+
         # 1. Classify Intent (with chat history for context)
         intent = self._run_llm(self.intent_prompt_builder, {"question": question, "chat_history": chat_history_str}, self.intent_llm).strip().lower()
         logger.info(f"Classified intent: '{intent}'")
