@@ -192,6 +192,43 @@ class StatsTracker:
         # Sort activity by day
         activity_by_day = dict(sorted(activity_by_day.items()))
         
+        # Advanced statistics
+        latencies = []
+        doc_counts = []
+        intent_counts = defaultdict(int)
+        model_counts = defaultdict(int)
+
+        for event in events:
+            if event.get("event_type") == "inference_completed":
+                metadata = event.get("metadata", {})
+
+                # Latency
+                if "latency" in metadata:
+                    latencies.append(metadata["latency"])
+
+                # Documents
+                if "doc_count" in metadata:
+                    doc_counts.append(metadata["doc_count"])
+
+                # Intent
+                if "intent" in metadata:
+                    intent_counts[str(metadata["intent"])] += 1
+
+                # Model
+                if "model" in metadata:
+                    model_counts[str(metadata["model"])] += 1
+
+        # Calculate averages/max
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0
+        max_latency = max(latencies) if latencies else 0
+        avg_docs = sum(doc_counts) / len(doc_counts) if doc_counts else 0
+
+        # Engagement: avg messages per session
+        # We rely on tracked sessions
+        total_sessions_created = events_by_type.get("session_created", 0)
+        total_messages = events_by_type.get("message_sent", 0)
+        avg_messages_per_session = total_messages / total_sessions_created if total_sessions_created > 0 else 0
+
         return {
             "total_events": len(events),
             "total_sessions": events_by_type.get("session_created", 0),
@@ -205,6 +242,18 @@ class StatsTracker:
                 "last_24h": self._count_recent_events(events, hours=24),
                 "last_7d": self._count_recent_events(events, hours=24*7),
                 "last_30d": self._count_recent_events(events, hours=24*30),
+            },
+            "performance_metrics": {
+                "average_latency": round(avg_latency, 3),
+                "max_latency": round(max_latency, 3),
+                "average_docs_retrieved": round(avg_docs, 2)
+            },
+            "usage_insights": {
+                "intent_distribution": dict(intent_counts),
+                "model_usage": dict(model_counts)
+            },
+            "engagement_metrics": {
+                "avg_messages_per_session": round(avg_messages_per_session, 2)
             }
         }
     
