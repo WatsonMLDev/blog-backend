@@ -169,54 +169,81 @@ class StatsTracker:
                 "activity_by_day": {}
             }
         
-        # Count events by type
+        # Initialize accumulators
         events_by_type = defaultdict(int)
         unique_sessions = set()
         activity_by_day = defaultdict(int)
         
-        for event in events:
-            event_type = event.get("event_type", "unknown")
-            session_id = event.get("session_id")
-            timestamp = event.get("timestamp")
-            
-            events_by_type[event_type] += 1
-            
-            if session_id:
-                unique_sessions.add(session_id)
-            
-            # Group by day
-            if timestamp:
-                day = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
-                activity_by_day[day] += 1
-        
-        # Sort activity by day
-        activity_by_day = dict(sorted(activity_by_day.items()))
-        
-        # Advanced statistics
+        # Advanced statistics accumulators
         latencies = []
         doc_counts = []
         intent_counts = defaultdict(int)
         model_counts = defaultdict(int)
 
-        for event in events:
-            if event.get("event_type") == "inference_completed":
-                metadata = event.get("metadata", {})
+        # Recent activity accumulators
+        now = time.time()
+        # Cutoffs in seconds
+        cutoff_24h = now - (24 * 3600)
+        cutoff_7d = now - (7 * 24 * 3600)
+        cutoff_30d = now - (30 * 24 * 3600)
 
-                # Latency
+        # Helper to init recent stats dict
+        def init_recent_stats():
+            return {
+                "total_events": 0,
+                "sessions_created": 0,
+                "messages_sent": 0,
+                "unique_sessions_set": set()
+            }
+
+        recent_stats = {
+            "24h": init_recent_stats(),
+            "7d": init_recent_stats(),
+            "30d": init_recent_stats()
+        }
+
+        # Single pass iteration
+        for event in events:
+            event_type = event.get("event_type", "unknown")
+            session_id = event.get("session_id")
+            timestamp = event.get("timestamp", 0)
+            
+            # 1. Global counts
+            events_by_type[event_type] += 1
+            if session_id:
+                unique_sessions.add(session_id)
+            
+            if timestamp:
+                day = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
+                activity_by_day[day] += 1
+
+            # 2. Inference stats
+            if event_type == "inference_completed":
+                metadata = event.get("metadata", {})
                 if "latency" in metadata:
                     latencies.append(metadata["latency"])
-
-                # Documents
                 if "doc_count" in metadata:
                     doc_counts.append(metadata["doc_count"])
-
-                # Intent
                 if "intent" in metadata:
                     intent_counts[str(metadata["intent"])] += 1
-
-                # Model
                 if "model" in metadata:
                     model_counts[str(metadata["model"])] += 1
+
+            # 3. Recent activity stats
+            # Check 30d first (most inclusive)
+            if timestamp >= cutoff_30d:
+                self._update_recent_stats(recent_stats["30d"], event_type, session_id)
+
+                # Check 7d
+                if timestamp >= cutoff_7d:
+                    self._update_recent_stats(recent_stats["7d"], event_type, session_id)
+
+                    # Check 24h
+                    if timestamp >= cutoff_24h:
+                        self._update_recent_stats(recent_stats["24h"], event_type, session_id)
+
+        # Sort activity by day
+        activity_by_day = dict(sorted(activity_by_day.items()))
 
         # Calculate averages/max
         avg_latency = sum(latencies) / len(latencies) if latencies else 0
@@ -224,10 +251,18 @@ class StatsTracker:
         avg_docs = sum(doc_counts) / len(doc_counts) if doc_counts else 0
 
         # Engagement: avg messages per session
-        # We rely on tracked sessions
         total_sessions_created = events_by_type.get("session_created", 0)
         total_messages = events_by_type.get("message_sent", 0)
         avg_messages_per_session = total_messages / total_sessions_created if total_sessions_created > 0 else 0
+
+        # Format recent activity output
+        def format_recent(stats_dict):
+            return {
+                "total_events": stats_dict["total_events"],
+                "sessions_created": stats_dict["sessions_created"],
+                "messages_sent": stats_dict["messages_sent"],
+                "unique_sessions": len(stats_dict["unique_sessions_set"])
+            }
 
         return {
             "total_events": len(events),
@@ -239,9 +274,9 @@ class StatsTracker:
             "events_by_type": dict(events_by_type),
             "activity_by_day": activity_by_day,
             "recent_activity": {
-                "last_24h": self._count_recent_events(events, hours=24),
-                "last_7d": self._count_recent_events(events, hours=24*7),
-                "last_30d": self._count_recent_events(events, hours=24*30),
+                "last_24h": format_recent(recent_stats["24h"]),
+                "last_7d": format_recent(recent_stats["7d"]),
+                "last_30d": format_recent(recent_stats["30d"]),
             },
             "performance_metrics": {
                 "average_latency": round(avg_latency, 3),
@@ -256,26 +291,14 @@ class StatsTracker:
                 "avg_messages_per_session": round(avg_messages_per_session, 2)
             }
         }
-    
-    def _count_recent_events(self, events: List[Dict], hours: int) -> Dict[str, int]:
-        """Count events within the specified number of hours."""
-        cutoff_time = time.time() - (hours * 60 * 60)
-        recent_events = [e for e in events if e.get("timestamp", 0) >= cutoff_time]
+
+    def _update_recent_stats(self, stats, event_type, session_id):
+        """Helper to update a recent stats accumulator."""
+        stats["total_events"] += 1
+        if event_type == "session_created":
+            stats["sessions_created"] += 1
+        elif event_type == "message_sent":
+            stats["messages_sent"] += 1
         
-        events_by_type = defaultdict(int)
-        unique_sessions = set()
-        
-        for event in recent_events:
-            event_type = event.get("event_type", "unknown")
-            session_id = event.get("session_id")
-            
-            events_by_type[event_type] += 1
-            if session_id:
-                unique_sessions.add(session_id)
-        
-        return {
-            "total_events": len(recent_events),
-            "sessions_created": events_by_type.get("session_created", 0),
-            "messages_sent": events_by_type.get("message_sent", 0),
-            "unique_sessions": len(unique_sessions)
-        }
+        if session_id:
+            stats["unique_sessions_set"].add(session_id)
