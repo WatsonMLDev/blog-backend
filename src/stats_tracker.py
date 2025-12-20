@@ -43,21 +43,28 @@ class StatsTracker:
         """Migrates legacy JSON format to JSONL if detected."""
         try:
             with open(self.stats_file, 'r') as f:
-                first_char = f.read(1)
-                if first_char != '{':
-                    return # Already JSONL or empty
+                # Read a small chunk to detect format, skipping whitespace
+                start_content = f.read(1024).strip()
+                if not start_content or not start_content.startswith('{'):
+                    return # Not JSON or empty
 
-                # It's legacy JSON, read the rest
+                # It might be legacy JSON or JSONL.
+                # Reset file pointer
                 f.seek(0)
+
                 try:
+                    # Try to load as a single JSON object (Legacy format)
                     data = json.load(f)
+
                     # Verify it's actually the legacy structure
                     if not isinstance(data, dict) or "events" not in data:
                         return # Not legacy format (might be single line JSONL)
 
                     events = data.get("events", [])
                 except json.JSONDecodeError:
-                    return # Corrupted or empty
+                    # If JSONDecodeError, it likely means multiple JSON objects (JSONL)
+                    # or invalid JSON. In either case, we don't migrate.
+                    return
 
             # Write back in JSONL format
             logger.info(f"Migrating stats file {self.stats_file} to JSONL format...")
@@ -107,12 +114,31 @@ class StatsTracker:
         """
         try:
             events = []
+            seen_events = set()
+
             with open(self.stats_file, 'r') as f:
                 for line in f:
                     line = line.strip()
                     if line:
                         try:
-                            events.append(json.loads(line))
+                            event = json.loads(line)
+
+                            # Deduplicate events based on content
+                            # Using tuple of (timestamp, event_type, session_id, sorted metadata items)
+                            metadata = event.get("metadata", {})
+                            metadata_key = tuple(sorted((str(k), str(v)) for k, v in metadata.items())) if metadata else ()
+
+                            event_key = (
+                                event.get("timestamp"),
+                                event.get("event_type"),
+                                event.get("session_id"),
+                                metadata_key
+                            )
+
+                            if event_key not in seen_events:
+                                seen_events.add(event_key)
+                                events.append(event)
+
                         except json.JSONDecodeError:
                             continue
             
@@ -166,6 +192,43 @@ class StatsTracker:
         # Sort activity by day
         activity_by_day = dict(sorted(activity_by_day.items()))
         
+        # Advanced statistics
+        latencies = []
+        doc_counts = []
+        intent_counts = defaultdict(int)
+        model_counts = defaultdict(int)
+
+        for event in events:
+            if event.get("event_type") == "inference_completed":
+                metadata = event.get("metadata", {})
+
+                # Latency
+                if "latency" in metadata:
+                    latencies.append(metadata["latency"])
+
+                # Documents
+                if "doc_count" in metadata:
+                    doc_counts.append(metadata["doc_count"])
+
+                # Intent
+                if "intent" in metadata:
+                    intent_counts[str(metadata["intent"])] += 1
+
+                # Model
+                if "model" in metadata:
+                    model_counts[str(metadata["model"])] += 1
+
+        # Calculate averages/max
+        avg_latency = sum(latencies) / len(latencies) if latencies else 0
+        max_latency = max(latencies) if latencies else 0
+        avg_docs = sum(doc_counts) / len(doc_counts) if doc_counts else 0
+
+        # Engagement: avg messages per session
+        # We rely on tracked sessions
+        total_sessions_created = events_by_type.get("session_created", 0)
+        total_messages = events_by_type.get("message_sent", 0)
+        avg_messages_per_session = total_messages / total_sessions_created if total_sessions_created > 0 else 0
+
         return {
             "total_events": len(events),
             "total_sessions": events_by_type.get("session_created", 0),
@@ -179,6 +242,18 @@ class StatsTracker:
                 "last_24h": self._count_recent_events(events, hours=24),
                 "last_7d": self._count_recent_events(events, hours=24*7),
                 "last_30d": self._count_recent_events(events, hours=24*30),
+            },
+            "performance_metrics": {
+                "average_latency": round(avg_latency, 3),
+                "max_latency": round(max_latency, 3),
+                "average_docs_retrieved": round(avg_docs, 2)
+            },
+            "usage_insights": {
+                "intent_distribution": dict(intent_counts),
+                "model_usage": dict(model_counts)
+            },
+            "engagement_metrics": {
+                "avg_messages_per_session": round(avg_messages_per_session, 2)
             }
         }
     
