@@ -91,9 +91,9 @@ class PortfolioRagPipeline:
         # --- Query Expansion Prompt (Enhanced) ---
         self.expander_prompt_builder = ChatPromptBuilder(template=[
             ChatMessage.from_system(
-                "Rewrite the user's question into a concise search query for retrieval.\n"
-                "If it's a follow-up (e.g., 'yes', 'tell me more'), use the conversation history to make it self-contained.\n"
-                "Otherwise, return the question as is."
+                "Rewrite the user's question into a self-contained search query for retrieval.\n"
+                "Resolve any pronouns (e.g., 'it', 'that', 'his') using the conversation history.\n"
+                "If the question is already self-contained, return it unchanged."
             ),
             ChatMessage.from_user(
                 "Conversation History:\n{{chat_history}}\n\n"
