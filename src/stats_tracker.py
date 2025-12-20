@@ -43,21 +43,28 @@ class StatsTracker:
         """Migrates legacy JSON format to JSONL if detected."""
         try:
             with open(self.stats_file, 'r') as f:
-                first_char = f.read(1)
-                if first_char != '{':
-                    return # Already JSONL or empty
+                # Read a small chunk to detect format, skipping whitespace
+                start_content = f.read(1024).strip()
+                if not start_content or not start_content.startswith('{'):
+                    return # Not JSON or empty
 
-                # It's legacy JSON, read the rest
+                # It might be legacy JSON or JSONL.
+                # Reset file pointer
                 f.seek(0)
+
                 try:
+                    # Try to load as a single JSON object (Legacy format)
                     data = json.load(f)
+
                     # Verify it's actually the legacy structure
                     if not isinstance(data, dict) or "events" not in data:
                         return # Not legacy format (might be single line JSONL)
 
                     events = data.get("events", [])
                 except json.JSONDecodeError:
-                    return # Corrupted or empty
+                    # If JSONDecodeError, it likely means multiple JSON objects (JSONL)
+                    # or invalid JSON. In either case, we don't migrate.
+                    return
 
             # Write back in JSONL format
             logger.info(f"Migrating stats file {self.stats_file} to JSONL format...")
@@ -107,12 +114,31 @@ class StatsTracker:
         """
         try:
             events = []
+            seen_events = set()
+
             with open(self.stats_file, 'r') as f:
                 for line in f:
                     line = line.strip()
                     if line:
                         try:
-                            events.append(json.loads(line))
+                            event = json.loads(line)
+
+                            # Deduplicate events based on content
+                            # Using tuple of (timestamp, event_type, session_id, sorted metadata items)
+                            metadata = event.get("metadata", {})
+                            metadata_key = tuple(sorted((str(k), str(v)) for k, v in metadata.items())) if metadata else ()
+
+                            event_key = (
+                                event.get("timestamp"),
+                                event.get("event_type"),
+                                event.get("session_id"),
+                                metadata_key
+                            )
+
+                            if event_key not in seen_events:
+                                seen_events.add(event_key)
+                                events.append(event)
+
                         except json.JSONDecodeError:
                             continue
             
