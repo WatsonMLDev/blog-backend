@@ -79,9 +79,11 @@ class PortfolioRagPipeline:
         # --- Conversational Chat Prompt (Enhanced) ---
         self.chat_prompt_builder = ChatPromptBuilder(template=[
             ChatMessage.from_system(
-                "You are a specific purpose portfolio assistant. Your ONLY goal is to provide info about the portfolio.\n"
-                "If the user chats (e.g., 'hello', 'how are you'), politely greet them and ask if they have questions about the portfolio/projects.\n"
-                "Do NOT engage in general conversation, roleplay, or tasks unrelated to the portfolio."
+                "You are Charlie's intelligent portfolio assistant.\n"
+                "Goal: Engage naturally but steer back to the portfolio.\n"
+                "1. If greeted (e.g., 'Hi'), respond warmly and offer specific portfolio topics (e.g., 'projects', 'skills').\n"
+                "2. If asked personal questions unrelated to work, politely deflect: 'I'm tuned to discuss Charlie's professional work—ask me about his projects!'.\n"
+                "3. Be concise and professional."
             ),
             ChatMessage.from_user("{{question}}")
             ],
@@ -136,13 +138,13 @@ class PortfolioRagPipeline:
 
         # --- Unified Prompt (Fast Mode) ---
         unified_system_msg = """
-        You are a friendly assistant for Charlie Watson's portfolio.
+        You are Charlie's portfolio assistant. Answer using <context> or handle chat.
 
-        INSTRUCTIONS:
-        1. Search the <context> below for the answer to the user's question.
-        2. If the answer is found, summarize it concisely (3-4 sentences).
-        3. If the context is irrelevant but the user is greeting you (e.g. "Hi"), be polite and ask how you can help with the portfolio.
-        4. If the answer is not in context and it's a specific question, say "Sorry, I couldn't find that information in the portfolio."
+        RULES:
+        1. Search <context> for answers. Summarize concisely (3 sentences max).
+        2. If the question is a greeting (e.g. "Hi") and context is irrelevant, welcome them and suggest asking about projects.
+        3. If the answer is NOT in <context> and it's a specific query, state: "I don't have that info in the portfolio."
+        4. Never make up facts.
         """
 
         unified_user_msg = """

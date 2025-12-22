@@ -34,7 +34,7 @@ def test_chat_prompt_structure(mock_pipeline):
 
     assert len(messages) == 2
     assert messages[0].role.value == "system"
-    assert "specific purpose portfolio assistant" in messages[0].text
+    assert "Charlie's intelligent portfolio assistant" in messages[0].text
     assert messages[1].role.value == "user"
     assert "How are you?" in messages[1].text
 
@@ -66,7 +66,7 @@ def test_unified_prompt_structure(mock_pipeline):
     assert len(messages) == 2
     assert messages[0].role.value == "system"
     assert "Unified Prompt" not in messages[0].text # Just checking content isn't leaked
-    assert "INSTRUCTIONS:" in messages[0].text
+    assert "RULES:" in messages[0].text
 
     content = messages[1].text
     assert "<question>Q?</question>" in content
