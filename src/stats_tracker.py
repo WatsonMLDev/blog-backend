@@ -5,6 +5,7 @@ from datetime import datetime
 from collections import defaultdict
 import logging
 from pathlib import Path
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,15 @@ class StatsTracker:
             stats_file: Path to the JSON file for storing stats
         """
         self.stats_file = stats_file
+        self.events = []
+        self.seen_events = set()
+        self.last_file_pos = 0
+
         self._ensure_file_exists()
+
+        # Initial load of stats to memory
+        self._load_new_events()
+
         logger.info(f"StatsTracker initialized with file: {stats_file}")
     
     def _ensure_file_exists(self):
@@ -76,6 +85,60 @@ class StatsTracker:
         except Exception as e:
             logger.error(f"Error checking/migrating stats file: {e}")
 
+    def _load_new_events(self):
+        """
+        Reads only new events from the stats file since the last read.
+        Updates self.events and self.seen_events in place.
+        """
+        try:
+            # Check if file exists and current size
+            if not os.path.exists(self.stats_file):
+                return
+
+            # If file is smaller than last read position, it was likely truncated/rotated
+            current_size = os.path.getsize(self.stats_file)
+            if current_size < self.last_file_pos:
+                logger.warning(f"Stats file truncated. Resetting stats. Old pos: {self.last_file_pos}, New size: {current_size}")
+                self.last_file_pos = 0
+                self.events = []
+                self.seen_events = set()
+
+            if current_size == self.last_file_pos:
+                return # No new data
+
+            with open(self.stats_file, 'r') as f:
+                f.seek(self.last_file_pos)
+
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            event = json.loads(line)
+
+                            # Deduplicate events based on content
+                            # Using tuple of (timestamp, event_type, session_id, sorted metadata items)
+                            metadata = event.get("metadata", {})
+                            metadata_key = tuple(sorted((str(k), str(v)) for k, v in metadata.items())) if metadata else ()
+
+                            event_key = (
+                                event.get("timestamp"),
+                                event.get("event_type"),
+                                event.get("session_id"),
+                                metadata_key
+                            )
+
+                            if event_key not in self.seen_events:
+                                self.seen_events.add(event_key)
+                                self.events.append(event)
+
+                        except json.JSONDecodeError:
+                            continue
+
+                self.last_file_pos = f.tell()
+
+        except Exception as e:
+            logger.error(f"Failed to load stats: {e}")
+
     def log_event(self, event_type: str, session_id: str, metadata: Dict[str, Any] = None):
         """
         Log an event to the stats file (append-only JSONL).
@@ -98,6 +161,14 @@ class StatsTracker:
             with open(self.stats_file, 'a') as f:
                 f.write(json.dumps(event) + "\n")
             
+            # Optimistically update in-memory state to reflect this change immediately
+            # Note: _load_new_events will re-read this from file later, but deduplication will handle it.
+            # Actually, to avoid race conditions or double entry if file write succeeds but next read fails (rare),
+            # we rely on _load_new_events to be the source of truth.
+            # However, for immediate consistency if get_stats is called right after log_event without file flush:
+            # Python's flush usually works fine.
+            # We will just let _load_new_events pick it up.
+
             logger.debug(f"Logged event: {event_type} for session {session_id}")
         except Exception as e:
             logger.error(f"Failed to log event: {e}")
@@ -113,34 +184,10 @@ class StatsTracker:
             Dictionary with various statistics
         """
         try:
-            events = []
-            seen_events = set()
+            # Refresh events from file
+            self._load_new_events()
 
-            with open(self.stats_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        try:
-                            event = json.loads(line)
-
-                            # Deduplicate events based on content
-                            # Using tuple of (timestamp, event_type, session_id, sorted metadata items)
-                            metadata = event.get("metadata", {})
-                            metadata_key = tuple(sorted((str(k), str(v)) for k, v in metadata.items())) if metadata else ()
-
-                            event_key = (
-                                event.get("timestamp"),
-                                event.get("event_type"),
-                                event.get("session_id"),
-                                metadata_key
-                            )
-
-                            if event_key not in seen_events:
-                                seen_events.add(event_key)
-                                events.append(event)
-
-                        except json.JSONDecodeError:
-                            continue
+            events = self.events
             
             # Filter by date if specified
             if days is not None:
