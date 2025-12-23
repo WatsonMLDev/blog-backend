@@ -7,7 +7,7 @@ from fastapi import FastAPI, Depends, HTTPException, Security, status
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from src.ingestion import GitRepositoryIngester
 from src.pipeline import PortfolioRagPipeline
@@ -60,7 +60,7 @@ async def get_api_key(api_key_header: str = Security(api_key_header)):
 
 # --- Data Models ---
 class ChatRequest(BaseModel):
-    question: str
+    question: str = Field(..., max_length=2000, description="User question, max 2000 chars")
     session_id: Optional[str] = None
 
 class ChatResponse(BaseModel):
