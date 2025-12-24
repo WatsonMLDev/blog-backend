@@ -69,12 +69,26 @@ class ChatResponse(BaseModel):
     documents: list
 
 # --- Ingestion Logic ---
-def run_ingestion():
+ingestion_lock = threading.Lock()
+
+def _run_ingestion_internal():
+    """Internal function to run ingestion. Assumes lock is held if necessary."""
     try:
         result = ingester.run()
         logger.info(f"Ingestion result: {result}")
     except Exception as e:
         logger.error(f"Ingestion failed: {e}")
+
+def run_ingestion():
+    """Scheduled task wrapper with locking."""
+    if not ingestion_lock.acquire(blocking=False):
+        logger.warning("Scheduled ingestion skipped: Ingestion already in progress.")
+        return
+
+    try:
+        _run_ingestion_internal()
+    finally:
+        ingestion_lock.release()
 
 def cleanup_sessions():
     """Clean up expired chat sessions."""
@@ -227,7 +241,20 @@ async def get_stats(days: int = None, api_key: bool = Depends(get_api_key)):
 
 @app.post("/run-ingestion")
 def run_ingestion_endpoint(api_key: bool = Depends(get_api_key)):
-    threading.Thread(target=run_ingestion, daemon=True).start()
+    # Sentinel Fix: Prevent concurrent ingestion (DoS protection)
+    if not ingestion_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ingestion is already in progress."
+        )
+
+    def protected_ingestion():
+        try:
+            _run_ingestion_internal()
+        finally:
+            ingestion_lock.release()
+
+    threading.Thread(target=protected_ingestion, daemon=True).start()
     return {"status": "Ingestion started."}
 
 if __name__ == "__main__":
