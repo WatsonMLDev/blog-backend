@@ -75,9 +75,32 @@ class GitRepositoryIngester:
             return url.replace(f"oauth2:{self.github_token}@", "oauth2:***@")
         return url
 
+    def _validate_repo_url(self, url: str) -> None:
+        """
+        Validates the repository URL to prevent security issues.
+        Enforces allowed schemes and prevents argument injection or newlines.
+        """
+        if not url:
+            raise ValueError("Repository URL cannot be empty.")
+
+        # Check for newlines (basic sanitization)
+        if '\n' in url or '\r' in url:
+            raise ValueError("Invalid repository URL: contains newline characters.")
+
+        # Prevent argument injection
+        if url.startswith("-"):
+            raise ValueError("Invalid repository URL: cannot start with a dash.")
+
+        # Enforce allowed schemes
+        allowed_schemes = ("https://", "http://", "git@", "ssh://")
+        if not any(url.startswith(scheme) for scheme in allowed_schemes):
+            raise ValueError(f"Invalid repository URL scheme. Allowed: {allowed_schemes}. Got: {url}")
+
     def clone_or_pull_repo(self) -> None:
         """Clones the repository or pulls the latest changes."""
         try:
+            self._validate_repo_url(self.repo_url)
+
             auth_repo_url = self.repo_url
             if self.github_token:
                 # Insert token into URL for authentication
