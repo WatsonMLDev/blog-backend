@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional
 
 # Haystack Core
@@ -164,10 +165,11 @@ class PortfolioRagPipeline:
             required_variables=["question", "documents"]
         )
 
-    def _run_llm(self, prompt_builder: ChatPromptBuilder, data: Dict[str, Any], llm: GoogleGenAIChatGenerator) -> str:
+    async def _run_llm(self, prompt_builder: ChatPromptBuilder, data: Dict[str, Any], llm: GoogleGenAIChatGenerator) -> str:
         """Helper function to run a prompt through a specific LLM and get the text reply."""
         prompt = prompt_builder.run(**data).get("prompt", [])
-        response = llm.run(messages=prompt)
+        # Offload synchronous LLM call to thread
+        response = await asyncio.to_thread(llm.run, messages=prompt)
         return response["replies"][0].text if response.get("replies") else ""
 
     async def run(self, question: str, chat_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
@@ -183,12 +185,16 @@ class PortfolioRagPipeline:
             logger.info("Running in FAST MODE (skipping intent classification and query expansion).")
 
             # 1. Retrieve Documents (using raw question)
-            query_embedding = self.query_embedder.run(text=question).get("embedding", [])
-            documents = self.retriever.run(query_embedding=query_embedding).get("documents", [])
+            # Offload embedding and retrieval to thread
+            query_embedding_result = await asyncio.to_thread(self.query_embedder.run, text=question)
+            query_embedding = query_embedding_result.get("embedding", [])
+
+            documents_result = await asyncio.to_thread(self.retriever.run, query_embedding=query_embedding)
+            documents = documents_result.get("documents", [])
             logger.info(f"Retrieved {len(documents)} documents.")
 
             # 2. Generate Final Answer with Unified Prompt
-            final_response = self._run_llm(
+            final_response = await self._run_llm(
                 self.unified_prompt_builder,
                 {"question": question, "documents": documents},
                 self.rag_llm
@@ -208,13 +214,13 @@ class PortfolioRagPipeline:
         chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in (chat_history or [])])
 
         # 1. Classify Intent (with chat history for context)
-        intent = self._run_llm(self.intent_prompt_builder, {"question": question, "chat_history": chat_history_str}, self.intent_llm).strip().lower()
+        intent = (await self._run_llm(self.intent_prompt_builder, {"question": question, "chat_history": chat_history_str}, self.intent_llm)).strip().lower()
         logger.info(f"Classified intent: '{intent}'")
         
         # 2a. Handle "chat" intent
         if "chat" in intent:
             logger.info("Handling as a conversational chat.")
-            final_response = self._run_llm(self.chat_prompt_builder, {"question": question}, self.chat_llm)
+            final_response = await self._run_llm(self.chat_prompt_builder, {"question": question}, self.chat_llm)
             latency = time.time() - start_time
             return {
                 "answer": final_response,
@@ -228,16 +234,20 @@ class PortfolioRagPipeline:
         logger.info("Handling as a search query.")
         
         # 3. Expand Query
-        expanded_query = self._run_llm(self.expander_prompt_builder, {"question": question, "chat_history": chat_history_str}, self.expander_llm)
+        expanded_query = await self._run_llm(self.expander_prompt_builder, {"question": question, "chat_history": chat_history_str}, self.expander_llm)
         logger.info(f"Expanded query: '{expanded_query}'")
         
         # 4. Retrieve Documents
-        query_embedding = self.query_embedder.run(text=expanded_query).get("embedding", [])
-        documents = self.retriever.run(query_embedding=query_embedding).get("documents", [])
+        # Offload embedding and retrieval to thread
+        query_embedding_result = await asyncio.to_thread(self.query_embedder.run, text=expanded_query)
+        query_embedding = query_embedding_result.get("embedding", [])
+
+        documents_result = await asyncio.to_thread(self.retriever.run, query_embedding=query_embedding)
+        documents = documents_result.get("documents", [])
         logger.info(f"Retrieved {len(documents)} documents.")
         
         # 5. Generate Final Answer (Note: No documents is handled by the prompt now)
-        final_response = self._run_llm(
+        final_response = await self._run_llm(
             self.rag_prompt_builder,
             {
                 "question": question,
