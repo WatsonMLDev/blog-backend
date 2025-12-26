@@ -2,7 +2,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from src.ingestion import GitRepositoryIngester
-import subprocess
 
 class TestIngestionValidation:
     @pytest.fixture
