@@ -2,6 +2,7 @@ import os
 import time
 import logging
 from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv
 
 # Haystack Core
 from haystack.dataclasses import ChatMessage
@@ -14,6 +15,7 @@ from haystack_integrations.components.embedders.google_genai import GoogleGenAIT
 from haystack_integrations.components.retrievers.chroma import ChromaEmbeddingRetriever
 from haystack_integrations.components.generators.google_genai import GoogleGenAIChatGenerator
 
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 class PortfolioRagPipeline:
@@ -36,10 +38,12 @@ class PortfolioRagPipeline:
         self.doc_store_path = os.environ.get("DOCUMENT_STORE_PATH", "./data/chroma_db")
         
         # Model selection for different pipeline stages
-        self.intent_model = os.environ.get("INTENT_MODEL", "gemini-3-flash-preview")
-        self.expander_model = os.environ.get("EXPANDER_MODEL", "gemini-3-flash-preview")
-        self.chat_model = os.environ.get("CHAT_MODEL", "gemini-3-flash-preview")
-        self.rag_model = os.environ.get("RAG_MODEL", "gemini-3-flash-preview")  # Use experimental for final answers
+        self.embedding_model = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
+        default_model = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
+        self.intent_model = os.environ.get("INTENT_MODEL", default_model)
+        self.expander_model = os.environ.get("EXPANDER_MODEL", default_model)
+        self.chat_model = os.environ.get("CHAT_MODEL", default_model)
+        self.rag_model = os.environ.get("RAG_MODEL", default_model)  # Use experimental for final answers
 
     def _initialize_components(self):
         """Initializes core Haystack components."""
@@ -47,7 +51,10 @@ class PortfolioRagPipeline:
             collection_name="git_repo_docs",
             persist_path=self.doc_store_path
         )
-        self.query_embedder = GoogleGenAITextEmbedder(api_key=self.gemini_key)
+        self.query_embedder = GoogleGenAITextEmbedder(
+            api_key=self.gemini_key,
+            model=self.embedding_model
+        )
         self.retriever = ChromaEmbeddingRetriever(
             document_store=self.document_store,
             top_k=self.top_k

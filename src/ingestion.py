@@ -48,6 +48,7 @@ class GitRepositoryIngester:
         self.directories_to_index = os.environ.get("DIRECTORIES_TO_INDEX", "").split(",")
         self.document_store_path = Path(os.environ.get("DOCUMENT_STORE_PATH", "./data/chroma_db"))
         self.gemini_api_key = Secret.from_env_var("GEMINI_API_KEY")
+        self.embedding_model = os.environ.get("EMBEDDING_MODEL", "gemini-embedding-001")
         self.github_token = os.environ.get("GITHUB_TOKEN")
         self.allowed_extensions = {".md", ".txt", ".py", ".ts", ".js", ".json", ".yaml", ".yml", ".html", ".htm", ".csv"}
 
@@ -64,7 +65,13 @@ class GitRepositoryIngester:
     def _initialize_pipeline(self) -> Pipeline:
         """Builds and returns the Haystack indexing pipeline."""
         pipeline = Pipeline()
-        pipeline.add_component("embedder", GoogleGenAIDocumentEmbedder(api_key=self.gemini_api_key))
+        pipeline.add_component(
+            "embedder",
+            GoogleGenAIDocumentEmbedder(
+                api_key=self.gemini_api_key,
+                model=self.embedding_model
+            )
+        )
         pipeline.add_component("writer", DocumentWriter(document_store=self.document_store))
         pipeline.connect("embedder.documents", "writer.documents")
         return pipeline
